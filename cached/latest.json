@@ -1,0 +1,96 @@
+{
+  "run_id": "latest",
+  "kind": "kaizen-cached-run",
+  "version": 1,
+  "provenance": "SEEDED FIXTURE - illustrative numbers, not a live measurement",
+  "provenance_detail": "Scores below are hand-authored to demonstrate the UI contract and the divergent-lift headline. They were NOT produced by calling the Gemini API. Replace with a real run (POST /run with GEMINI_API_KEY set) before quoting any number publicly. The shape is contract-exact; the values are demo insurance (PRD FR-5.4 / NFR-3).",
+  "created": "2026-10-11T00:00:00Z",
+  "judge": "gemma",
+  "judge_model": "gemma-4-31b-it",
+  "skill": {
+    "name": "fault-inject",
+    "dir": "skills/fault-inject",
+    "description": "Detects silent tool failures - a command that exits 0 while quietly dropping rows, truncating output, or swallowing an error.",
+    "skill_hash": "sha256:7f3c1d9a4e8b2056cc1f0a7d3e9b5421",
+    "scripts": ["probe.py"],
+    "rubric_criteria": 6
+  },
+  "task": "The nightly ETL reported exit code 0. Rows in: 1000. Rows out: 880. The amount column sums to 45231.50 on both sides. Did anything go wrong?",
+  "models": ["gemma-4-31b-it", "gemma-4-26b-a4b-it"],
+  "events": [
+    {
+      "type": "result",
+      "model": "gemma-4-31b-it",
+      "phase": "baseline",
+      "score": 35,
+      "reasoning": "The answer correctly notices the row-count gap but treats it as unconfirmed, hedges with 'may indicate', and never names the failure mode. Exit code 0 is implicitly trusted. Counts are stated but no percentage is computed and no stage is named.",
+      "output": "The job exited successfully, so the pipeline itself did not crash. However, there is a discrepancy: 1000 rows went in and 880 came out, which may indicate that some records were dropped. You may want to check the transform step. The amount column totals match on both sides, which is a good sign that the surviving data is intact. Overall it looks mostly fine, though I'd investigate further before trusting it.",
+      "cached": false,
+      "criteria": [
+        {"name": "reconciles-row-counts", "met": true},
+        {"name": "names-the-classification", "met": false},
+        {"name": "distrusts-exit-zero", "met": false},
+        {"name": "cites-concrete-evidence", "met": true},
+        {"name": "computes-delta-percent", "met": false},
+        {"name": "verdict-names-the-stage", "met": false}
+      ]
+    },
+    {
+      "type": "result",
+      "model": "gemma-4-31b-it",
+      "phase": "treatment",
+      "score": 97,
+      "reasoning": "All six criteria met. Counts reconciled with an explicit delta and percentage (120 rows, 12.0%), the failure is classified QUIET, exit code 0 is explicitly distinguished from correctness, the transform stage is named, and the matching column sum is correctly reported as narrowing rather than clearing the failure.",
+      "output": "classification: QUIET\nrows: 1000 in -> 880 out (delta 120, 12.0%)\ncolumn sum: 45231.50 -> 45231.50\nevidence: rows_in (1000) != rows_out (880) with no error raised; the amount column reconciles exactly, which localises the loss to a row-level filter in the transform step, not to re-encoding or truncation. Exit code 0 establishes only that the process did not crash.\nverdict: The transform step is dropping 12.0% of rows silently - add a reconciliation assertion on rows_in == rows_out before the write.",
+      "cached": false,
+      "criteria": [
+        {"name": "reconciles-row-counts", "met": true},
+        {"name": "names-the-classification", "met": true},
+        {"name": "distrusts-exit-zero", "met": true},
+        {"name": "cites-concrete-evidence", "met": true},
+        {"name": "computes-delta-percent", "met": true},
+        {"name": "verdict-names-the-stage", "met": true}
+      ]
+    },
+    {
+      "type": "result",
+      "model": "gemma-4-26b-a4b-it",
+      "phase": "baseline",
+      "score": 58,
+      "reasoning": "Without the skill this small MoE arm gives a tighter, more direct answer: it names the row discrepancy, computes the 12% gap, and flags the transform step. No exit-code framing and no formal classification, but the concrete evidence is there, so it scores above the 31B baseline.",
+      "output": "1000 rows went in and 880 came out, so 120 rows were dropped - about 12%. Since the job still exited 0, this is a silent data loss rather than a crash. The amount column matching on both sides means the surviving rows are intact, so the loss happened before or during the transform step. You should add a row-count check to the pipeline.",
+      "cached": false,
+      "criteria": [
+        {"name": "reconciles-row-counts", "met": true},
+        {"name": "names-the-classification", "met": false},
+        {"name": "distrusts-exit-zero", "met": true},
+        {"name": "cites-concrete-evidence", "met": true},
+        {"name": "computes-delta-percent", "met": true},
+        {"name": "verdict-names-the-stage", "met": true}
+      ]
+    },
+    {
+      "type": "result",
+      "model": "gemma-4-26b-a4b-it",
+      "phase": "treatment",
+      "score": 44,
+      "reasoning": "Negative lift. With the skill's six-constraint output template injected, this arm partially emits the format block, drops the reconciliation numbers it had produced unaided, and replaces the concrete 12% figure with hedged prose. Fewer criteria are met than in its own baseline, which is exactly the NVIDIA 27% failure mode made visible.",
+      "output": "classification: QUIET\nrows: some rows were lost\nevidence: the exit code was 0 but this does not necessarily mean the data is correct; a discrepancy between input and output row counts may indicate dropped records in the transform stage, though it is unclear exactly how many without further investigation.\nverdict: the transform step should be checked, and a reconciliation assertion would probably help.",
+      "cached": false,
+      "criteria": [
+        {"name": "reconciles-row-counts", "met": false},
+        {"name": "names-the-classification", "met": true},
+        {"name": "distrusts-exit-zero", "met": true},
+        {"name": "cites-concrete-evidence", "met": false},
+        {"name": "computes-delta-percent", "met": false},
+        {"name": "verdict-names-the-stage", "met": true}
+      ]
+    }
+  ],
+  "per_model": [
+    {"model": "gemma-4-31b-it", "baseline": 35, "treatment": 97, "lift": 62, "class": "POSITIVE"},
+    {"model": "gemma-4-26b-a4b-it", "baseline": 58, "treatment": 44, "lift": -14, "class": "NEGATIVE"}
+  ],
+  "spread": 76,
+  "headline": "this skill lifts +62 on gemma-4-31b-it and -14 on gemma-4-26b-a4b-it - spread 76 pp. NVIDIA ACES: 27% of skills do nothing or hurt - this is one of them"
+}

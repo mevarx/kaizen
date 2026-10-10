@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>kaizen — measure whether an Agent Skill actually improves your agent</title>
+<meta name="description" content="Paired A/B lift measurement for Agent Skills, with Gemma 4 as the open-weight reference arm and judge.">
+<style>
+  :root{
+    --bg:#080b10; --panel:#0d1117; --card:#10151c; --raise:#141b24;
+    --line:#212b38; --line2:#2c3947;
+    --fg:#e6edf3; --dim:#8b98a6; --faint:#5c6875;
+    --ok:#3fb950; --warn:#d29922; --err:#f85149; --info:#58a6ff; --neutral:#8b98a6;
+    --pos-bg:rgba(63,185,80,.10); --neg-bg:rgba(248,81,73,.10); --neu-bg:rgba(139,152,166,.10);
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--fg); font:14px/1.5 var(--mono);
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--info); text-underline-offset:2px;}
+  a:hover{color:#79b8ff;}
+  button{background:var(--raise); color:var(--fg); border:1px solid var(--line2);
+    border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit;}
+  button:hover{border-color:var(--dim); background:#18212c;}
+  button:active{transform:translateY(1px);}
+  button:focus-visible,a:focus-visible,textarea:focus-visible,input:focus-visible{
+    outline:2px solid var(--info); outline-offset:2px;}
+  button[disabled]{opacity:.5; cursor:not-allowed;}
+  button.primary{background:#123b1e; border-color:#1f6b33; color:#7ee787;}
+  button.primary:hover{background:#174a26; border-color:#2ea043;}
+  button.subtle{background:transparent;}
+  hr{border:0; border-top:1px solid var(--line); margin:14px 0;}
+
+  /* ---------- top bar ---------- */
+  header.top{
+    padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel);
+    display:flex; gap:12px; align-items:baseline; flex-wrap:wrap;
+    position:sticky; top:0; z-index:5;
+  }
+  .wordmark{font-size:17px; font-weight:700; letter-spacing:.04em; margin:0;}
+  .wordmark .kanji{color:var(--faint); font-weight:400; margin-right:8px; letter-spacing:0;}
+  .pitch{color:var(--dim); font-size:12.5px; margin:0; flex:1 1 420px; min-width:260px;}
+  .top .right{display:flex; gap:8px; align-items:center; margin-left:auto;}
+  .pill{
+    display:inline-flex; align-items:center; gap:6px; font-size:11px; padding:3px 9px;
+    border:1px solid var(--line2); border-radius:999px; color:var(--dim); background:var(--bg);
+    white-space:nowrap;
+  }
+  .pill.mode-live{color:#7ee787; border-color:#1f6b33;}
+  .pill.mode-cached{color:var(--warn); border-color:#5c4715;}
+  .pill.mode-offline{color:var(--err); border-color:#6e2b28;}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--faint); display:inline-block;}
+  .dot.live{background:var(--ok); animation:pulse 1s infinite;}
+  .dot.wait{background:var(--warn);}
+  .dot.dead{background:var(--err);}
+  @keyframes pulse{50%{opacity:.25;}}
+
+  .cite{color:var(--faint); font-size:11.5px; padding:0 20px; background:var(--panel);
+    border-bottom:1px solid var(--line); display:flex; gap:10px; flex-wrap:wrap;}
+
+  /* ---------- banners ---------- */
+  #banners{padding:0 20px;}
+  #banners:empty{display:none;}
+  .banner{
+    margin-top:14px; padding:9px 12px; border-radius:8px; font-size:12.5px;
+    border:1px solid var(--line2); background:var(--card); display:flex; gap:10px;
+    align-items:flex-start;
+  }
+  .banner b{font-weight:700;}
+  .banner.warn{border-color:#5c4715; background:rgba(210,153,34,.08);}
+  .banner.warn b{color:var(--warn);}
+  .banner.err{border-color:#6e2b28; background:rgba(248,81,73,.08);}
+  .banner.err b{color:var(--err);}
+  .banner.info{border-color:#1f4b7a; background:rgba(88,166,255,.07);}
+  .banner.info b{color:var(--info);}
+  .banner .x{margin-left:auto; background:none; border:0; color:var(--faint); cursor:pointer;
+    font:inherit; padding:0 2px; line-height:1;}
+  .banner .x:hover{color:var(--fg);}
+
+  /* ---------- layout ---------- */
+  main{display:grid; grid-template-columns:minmax(300px,340px) minmax(0,1fr);
+    gap:18px; padding:18px 20px 6px; align-items:start;}
+  @media (max-width:900px){ main{grid-template-columns:1fr;} }
+  aside.left{display:flex; flex-direction:column; gap:14px; position:sticky; top:78px;}
+  @media (max-width:900px){ aside.left{position:static;} }
+  section.panel{background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:14px;}
+  .panel h2{font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--dim); margin:0 0 10px; font-weight:600;}
+  label.fld{display:block; font-size:11.5px; color:var(--dim); margin:0 0 5px;}
+  textarea,input[type=text]{
+    width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line2);
+    border-radius:6px; padding:8px 9px; font:12.5px/1.5 var(--mono); resize:vertical;
+  }
+  textarea::placeholder,input::placeholder{color:var(--faint);}
+  .hint{font-size:11px; color:var(--faint); margin:6px 0 0;}
+  .fixtures{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;}
+  .fixtures button{font-size:11.5px; padding:4px 9px;}
+  .checks{display:flex; flex-direction:column; gap:7px; margin-bottom:4px;}
+  .chk{display:flex; gap:8px; align-items:center; font-size:12.5px; cursor:pointer; color:var(--fg);}
+  .chk input{accent-color:var(--ok); width:14px; height:14px; cursor:pointer;}
+  .chk .tag{font-size:10px; color:var(--faint); border:1px solid var(--line);
+    border-radius:4px; padding:0 5px; margin-left:6px;}
+  .actions{display:flex; gap:8px; flex-wrap:wrap;}
+  .actions button{flex:1 1 auto;}
+
+  /* ---------- model cards ---------- */
+  .cards{display:flex; flex-direction:column; gap:14px;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:10px;
+    padding:14px 16px; position:relative;}
+  .card.pos{border-left:3px solid var(--ok);}
+  .card.neg{border-left:3px solid var(--err);}
+  .card.neu{border-left:3px solid var(--neutral);}
+  .card.run{border-left:3px solid var(--info);}
+  .card-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
+  .model{font-size:14px; font-weight:700; letter-spacing:.01em;}
+  .model .arm{color:var(--faint); font-weight:400; font-size:11.5px; margin-left:8px;}
+  .spacer{margin-left:auto;}
+  .phase-tags{display:flex; gap:8px; font-size:11px; color:var(--dim); margin-top:8px; flex-wrap:wrap;}
+  .phase-tag{display:inline-flex; gap:5px; align-items:center;}
+  .phase-tag .arrow{color:var(--faint);}
+  .score{font-variant-numeric:tabular-nums; font-weight:700;}
+  .score.on{color:var(--ok);}
+  .score.off{color:var(--faint);}
+  .lift{margin-top:10px; display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;}
+  .lift .num{font-size:38px; line-height:1; font-weight:700; font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em;}
+  .lift .num.pos{color:var(--ok);} .lift .num.neg{color:var(--err);} .lift .num.neu{color:var(--neutral);}
+  .lift .unit{font-size:12px; color:var(--faint);}
+  .cls{font-size:10.5px; letter-spacing:.09em; padding:2px 8px; border-radius:999px;
+    border:1px solid var(--line2); text-transform:uppercase;}
+  .cls.POSITIVE{color:var(--ok); border-color:#1f6b33; background:var(--pos-bg);}
+  .cls.NEGATIVE{color:var(--err); border-color:#6e2b28; background:var(--neg-bg);}
+  .cls.NEUTRAL{color:var(--neutral); background:var(--neu-bg);}
+  .cls.skel{color:var(--faint);}
+
+  details{margin-top:10px; border-top:1px solid var(--line); padding-top:8px;}
+  details>summary{cursor:pointer; font-size:11.5px; color:var(--dim); list-style:none;
+    display:flex; align-items:center; gap:7px; user-select:none;}
+  details>summary::-webkit-details-marker{display:none;}
+  details>summary::before{content:"\25B8"; color:var(--faint); font-size:10px;
+    transition:transform .12s ease; display:inline-block;}
+  details[open]>summary::before{transform:rotate(90deg);}
+  details>summary:hover{color:var(--fg);}
+  .detail-body{margin-top:8px;}
+  pre{margin:0; white-space:pre-wrap; word-break:break-word; font-size:12px; line-height:1.55;
+    color:#c9d4e0; max-height:340px; overflow:auto;
+    background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:9px 10px;}
+  .crit{display:flex; gap:8px; align-items:flex-start; font-size:12px; color:#c9d4e0;
+    margin-top:7px;}
+  .crit .mark{font-weight:700; flex:0 0 auto;}
+  .crit.met .mark{color:var(--ok);} .crit.unmet .mark{color:var(--err);}
+  .badge-cache{font-size:10px; color:var(--warn); border:1px solid #5c4715;
+    border-radius:4px; padding:1px 6px; background:rgba(210,153,34,.08);}
+  .badge-src{font-size:10px; color:var(--dim); border:1px solid var(--line2);
+    border-radius:4px; padding:1px 6px;}
+
+  /* skeleton shimmer */
+  .sk{background:linear-gradient(90deg,var(--raise) 25%,#1a2330 50%,var(--raise) 75%);
+    background-size:200% 100%; animation:sh 1.4s linear infinite; border-radius:5px;
+    color:transparent !important; user-select:none;}
+  @keyframes sh{to{background-position:-200% 0;}}
+  /* pending shimmer: applied to the lift number + phase tags while a run is live
+     and a model's paired scores have not both arrived yet */
+  .num.pending,.phase-tag .score.pending{
+    background:linear-gradient(90deg,var(--raise) 25%,#1a2330 50%,var(--raise) 75%);
+    background-size:200% 100%; animation:sh 1.4s linear infinite;
+    border-radius:5px; color:transparent !important; user-select:none;
+    min-width:3.2em; display:inline-block;
+  }
+  .empty{color:var(--dim); font-size:13px; background:var(--panel);
+    border:1px dashed var(--line2); border-radius:10px; padding:28px 20px; text-align:center;}
+  .empty .big{font-size:15px; color:var(--fg); margin-bottom:8px;}
+  .empty p{margin:6px 0 0; font-size:12px; color:var(--faint);}
+  .empty code{color:var(--warn);}
+
+  /* ---------- footer ---------- */
+  footer{
+    position:sticky; bottom:0; z-index:4; margin-top:18px;
+    border-top:1px solid var(--line); background:rgba(8,11,16,.94);
+    backdrop-filter:blur(4px); padding:12px 20px;
+    display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+  }
+  .spread{font-size:13px; color:var(--dim);}
+  .spread .num{font-size:24px; font-weight:700; color:var(--fg);
+    font-variant-numeric:tabular-nums; margin:0 4px;}
+  .headline{font-size:13.5px; color:var(--fg);}
+  .disclaimer{font-size:11px; color:var(--faint); width:100%; margin:0;}
+  @media (prefers-reduced-motion:reduce){
+    .dot.live{animation:none;} .sk{animation:none;}
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1 class="wordmark"><span class="kanji">改善</span>kaizen</h1>
+  <p class="pitch">Measure whether an Agent Skill actually improves your agent — same task, with and without, across models.</p>
+  <div class="right">
+    <span class="pill" id="mode-pill"><span class="dot" id="mode-dot"></span><span id="mode-text">booting</span></span>
+    <button id="stop-btn" class="subtle" type="button" hidden>Stop</button>
+  </div>
+</header>
+
+<div class="cite">
+  <span>NVIDIA ACES (Aug 2026): <b>27% of paired runs show zero or negative lift</b> — <a href="https://arxiv.org/abs/2406.10279" target="_blank" rel="noopener">arXiv 2406.10279</a></span>
+  <span>structural scan ↔ runtime behaviour: ρ ≈ −0.02</span>
+</div>
+
+<div id="banners" role="status" aria-live="polite"></div>
+
+<main>
+  <aside class="left">
+    <section class="panel">
+      <h2>Skill under test</h2>
+      <div class="fixtures" id="fixtures"><span class="hint" style="margin:0">loading fixtures…</span></div>
+      <label class="fld" for="skill-md">Paste a SKILL.md</label>
+      <textarea id="skill-md" rows="7" spellcheck="false"
+        placeholder="---&#10;name: my-skill&#10;description: ...&#10;---&#10;&#10;Instructions for the agent."></textarea>
+      <p class="hint">Spec-compliant frontmatter (<code>name</code> + <code>description</code>) required. Paste a fixture, or type your own.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Task &amp; models</h2>
+      <label class="fld" for="task">Task prompt (identical for both arms)</label>
+      <input id="task" type="text" value="Summarize the failure mode and say what to do next." spellcheck="false">
+      <hr>
+      <label class="fld">Reference arms</label>
+      <div class="checks" id="models">
+        <label class="chk"><input type="checkbox" value="gemma-4-31b-it" checked><span>gemma-4-31b-it</span><span class="tag">reference</span></label>
+        <label class="chk"><input type="checkbox" value="gemma-4-26b-a4b-it" checked><span>gemma-4-26b-a4b-it</span><span class="tag">reference</span></label>
+      </div>
+      <div class="actions" style="margin-top:14px">
+        <button id="run-btn" class="primary" type="button">Run live</button>
+        <button id="cached-btn" class="subtle" type="button">Show cached</button>
+      </div>
+      <p class="hint" id="judge-hint">judge: loading…</p>
+    </section>
+  </aside>
+
+  <section aria-label="results">
+    <div class="cards" id="cards">
+      <div class="empty" id="empty">
+        <div class="big">no measurement yet</div>
+        Paste a SKILL.md and hit <b>Run live</b>, or <b>Show cached</b> for the seeded demo run.
+        <p>If the server is unreachable this page still renders — the dashboard reports the offline state rather than failing silently.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer id="footer" hidden>
+  <span class="spread">spread <span class="num" id="spread-num">0</span> pp</span>
+  <span class="headline" id="headline"></span>
+  <p class="disclaimer">lift is Gemma-as-judge, not ground truth — the paired design isolates the variable, the judge is a model. Single sample per cell (N=1); scores are cache-backed and reproducible.</p>
+</footer>
+
+<script>
+(function(){
+"use strict";
+
+/* ============================ state ============================ */
+var S = {
+  mode: "boot",          // boot | idle | live | cached | offline
+  connected: false,      // SSE currently attached
+  models: {},            // model -> record
+  order: [],             // model arrival order
+  busy: false,
+  runId: null,
+  stopped: false,        // latched ONLY by an explicit user Stop; cleared by any new run
+  reqId: 0,              // guards stale async responses
+  skills: [],
+  cached: {}
+};
+
+var NV = "--", NL = "--";
+var es = null;           // active EventSource (module scope)
+
+var els = {};
+["mode-pill","mode-dot","mode-text","stop-btn","banners","fixtures","skill-md","task",
+ "models","run-btn","cached-btn","judge-hint","cards","empty","footer","spread-num",
+ "headline"].forEach(function(id){ els[id] = document.getElementById(id); });
+
+/* ============================ dom helpers ============================ */
+function el(tag, cls, text){
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = String(text);
+  return n;
+}
+function clear(node){ while (node.firstChild) node.removeChild(node.firstChild); }
+
+var esc = (window.kaizenEsc || function(s){
+  return String(s === undefined || s === null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+});
+
+/* ============================ formatting ============================ */
+function signed(n){
+  if (typeof n !== "number" || !isFinite(n)) return NV;
+  return (n > 0 ? "+" : "") + n;
+}
+function sc(v){ return (typeof v === "number" && isFinite(v)) ? String(v) : NL; }
+function escAttr(s){ return esc(s); }
+
+function setMode(mode){
+  S.mode = mode;
+  var text, cls, dot;
+  if (mode === "live")        { text = "live · streaming";   cls = "mode-live";    dot = "dot live"; }
+  else if (mode === "cached") { text = "cached run";         cls = "mode-cached";  dot = "dot wait"; }
+  else if (mode === "offline"){ text = "offline";            cls = "mode-offline"; dot = "dot dead"; }
+  else if (mode === "boot")   { text = "booting";            cls = "";             dot = "dot"; }
+  else                        { text = "idle";               cls = "";             dot = "dot"; }
+  els["mode-pill"].className = "pill " + cls;
+  els["mode-dot"].className = dot;
+  els["mode-text"].textContent = text;
+}
+
+/* ============================ banners ============================ */
+function banner(kind, title, msg){
+  var b = el("div", "banner " + kind);
+  b.setAttribute("role", kind === "err" ? "alert" : "status");
+  var t = el("b", null, title);
+  b.appendChild(t);
+  if (msg) { b.appendChild(document.createTextNode(" " + msg)); }
+  var x = el("button", "x", "\u00D7");
+  x.type = "button";
+  x.setAttribute("aria-label", "Dismiss");
+  x.onclick = function(){ if (b.parentNode) b.parentNode.removeChild(b); };
+  b.appendChild(x);
+  els.banners.appendChild(b);
+}
+function clearBanners(){ clear(els.banners); }
+
+/* Banner event from the server: degrade/no-key/etc. (PRD §12, §17). */
+function serverBanner(msg, kind, label){
+  kind = kind || "warn";
+  if (!msg) return;
+  if (label === undefined){
+    label = (kind === "err") ? "error" : (kind === "info" ? "note" : "degraded");
+  }
+  var dup = false;
+  for (var i = 0; i < els.banners.children.length; i++){
+    if (els.banners.children[i].getAttribute("data-msg") === msg) dup = true;
+  }
+  if (dup) return;
+  var b = el("div", "banner " + kind);
+  b.setAttribute("data-msg", msg);
+  b.setAttribute("role", kind === "err" ? "alert" : "status");
+  b.appendChild(el("b", null, label));
+  b.appendChild(document.createTextNode(" " + msg));
+  var x = el("button", "x", "×");
+  x.type = "button";
+  x.setAttribute("aria-label", "Dismiss");
+  x.onclick = function(){ if (b.parentNode) b.parentNode.removeChild(b); };
+  b.appendChild(x);
+  els.banners.appendChild(b);
+}
+
+/* ============================ model cards ============================ */
+// One record per model; the record carries its own DOM node + element refs so
+// streaming events can update in place. Cards are created lazily here, so both
+// the skeleton path and the event path converge on the same node.
+function ensureModel(model, cached){
+  var rec = S.models[model];
+  if (rec){
+    if (cached) rec.cached = true;
+    return rec;
+  }
+  rec = { model: model, baseline: null, treatment: null, reasoning: "", criteria: [],
+          outputs: {}, cached: !!cached };
+  S.models[model] = rec;
+  S.order.push(model);
+  cardNode(rec);
+  return rec;
+}
+
+function cardNode(rec){
+  var card = el("article", "card run");
+  card.id = "card-" + rec.model.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+  var head = el("div", "card-head");
+  head.appendChild(el("span", "model", rec.model));
+  head.appendChild(el("span", "spacer"));
+  rec.clsEl = el("span", "cls skel", "pending");
+  head.appendChild(rec.clsEl);
+  card.appendChild(head);
+
+  var tags = el("div", "phase-tags");
+  rec.tagBase = el("span", "phase-tag", "baseline " + NV);
+  rec.tagTreat = el("span", "phase-tag", "");
+  rec.tagTreat.appendChild(el("span", null, "treatment "));
+  rec.tagTreatVal = el("span", "score off", NL);
+  rec.tagTreat.appendChild(rec.tagTreatVal);
+  tags.appendChild(rec.tagBase);
+  tags.appendChild(el("span", "arrow", "→"));
+  tags.appendChild(rec.tagTreat);
+  card.appendChild(tags);
+
+  var lift = el("div", "lift");
+  rec.liftNum = el("span", "num", NV);
+  lift.appendChild(rec.liftNum);
+  lift.appendChild(el("span", "unit", "pp lift"));
+  card.appendChild(lift);
+
+  rec.cacheEl = el("span", "badge-cache", "cached");
+  rec.cacheEl.hidden = true;
+  card.appendChild(rec.cacheEl);
+
+  var d1 = el("details");
+  d1.appendChild(el("summary", null, "judge reasoning"));
+  rec.critWrap = el("div", "criteria");
+  rec.reasonEl = el("pre", null, "");
+  rec.detail1 = el("div", "detail-body");
+  rec.detail1.appendChild(rec.critWrap);      // criteria list, above the reasoning
+  rec.detail1.appendChild(rec.reasonEl);
+  d1.appendChild(rec.detail1);
+  card.appendChild(d1);
+  rec.detReason = d1;
+
+  var d2 = el("details");
+  d2.appendChild(el("summary", null, "raw output"));
+  rec.outBase = el("pre", null, "");
+  rec.outTreat = el("pre", null, "");
+  rec.outBaseWrap = el("div", "detail-body");
+  rec.outBaseWrap.appendChild(el("div", "phase-tag", "baseline"));
+  rec.outBaseWrap.appendChild(rec.outBase);
+  rec.outTreatWrap = el("div", "detail-body");
+  rec.outTreatWrap.appendChild(el("div", "phase-tag", "treatment"));
+  rec.outTreatWrap.appendChild(rec.outTreat);
+  d2.appendChild(rec.outBaseWrap);
+  d2.appendChild(rec.outTreatWrap);
+  card.appendChild(d2);
+  rec.detOut = d2;
+
+  rec.node = card;
+  els.cards.appendChild(card);
+  return rec;
+}
+
+function renderCard(rec){
+  var base = rec.baseline, treat = rec.treatment;
+  var lift = (typeof base === "number" && typeof treat === "number") ? (treat - base) : null;
+
+  rec.tagBase.textContent = "baseline " + sc(base);
+  rec.tagTreatVal.textContent = sc(treat);
+  rec.tagTreatVal.className = "score " + (typeof treat === "number" ? "on" : "off");
+
+  if (lift === null){
+    rec.liftNum.textContent = NV;
+    rec.liftNum.className = "num pending";       // shimmer: paired scores not both in yet
+    rec.clsEl.textContent = "pending";
+    rec.clsEl.className = "cls skel";
+    rec.tagBase.className = "phase-tag" + (typeof base === "number" ? "" : " pending");
+    rec.tagTreatVal.className = "score " + (typeof treat === "number" ? "on" : "off pending");
+  } else {
+    rec.liftNum.textContent = signed(lift);
+    var cls = lift > 0 ? "POSITIVE" : (lift < 0 ? "NEGATIVE" : "NEUTRAL");
+    rec.liftNum.className = "num " + (lift > 0 ? "pos" : (lift < 0 ? "neg" : "neu"));
+    rec.clsEl.textContent = cls;
+    rec.clsEl.className = "cls " + cls;
+    rec.tagBase.className = "phase-tag";
+    rec.tagTreatVal.className = "score on";
+  }
+
+  var reason = rec.reasoning || "";
+  var hasReason = !!reason;
+  if (hasReason){
+    rec.reasonEl.textContent = reason;
+    rec.critWrap.textContent = "";
+    (rec.criteria || []).forEach(function(c){
+      var name = (c && (c.name || c.criterion)) || "criterion";
+      var met = !!(c && (c.met || c.pass || c.satisfied));
+      var row = el("div", "crit " + (met ? "met" : "unmet"));
+      row.appendChild(el("span", "mark", met ? "✓" : "✗"));
+      row.appendChild(el("span", null, name));
+      rec.critWrap.appendChild(row);
+    });
+  } else {
+    rec.reasonEl.textContent = "";
+    rec.critWrap.textContent = "";
+  }
+  rec.detReason.hidden = !hasReason;
+
+  var ob = rec.outputs.baseline || "", ot = rec.outputs.treatment || "";
+  rec.outBase.textContent = ob || "(no baseline output captured)";
+  rec.outTreat.textContent = ot || "(no treatment output captured)";
+  rec.detOut.hidden = !ob && !ot;
+
+  rec.cacheEl.hidden = !rec.cached;
+
+  rec.node.className = "card" + (lift === null ? " run" : (lift > 0 ? " pos" : (lift < 0 ? " neg" : " neu")));
+}
+
+// Running state: one card per selected model, showing "pending" until its
+// result events arrive. Reuses ensureModel/cardNode so a later result event
+// updates the SAME node instead of creating a second card.
+function skeletons(models){
+  resetCards();
+  els.empty.hidden = models.length > 0;
+  models.forEach(function(m){ ensureModel(m); renderCard(S.models[m]); });
+}
+
+/* ============================ data application ============================ */
+function applyResult(ev){
+  var model = ev.model || ev.model_name || "unknown";
+  var phase = ev.phase === "treatment" ? "treatment" : "baseline";
+  var rec = ensureModel(model, !!ev.cached);
+  if (ev.cached) rec.cached = true;
+  if (typeof ev.score === "number" && isFinite(ev.score)){
+    rec[phase] = ev.score;
+  }
+  if (ev.reasoning) rec.reasoning = ev.reasoning;
+  if (ev.criteria && ev.criteria.length) rec.criteria = ev.criteria;
+  if (ev.output !== undefined && ev.output !== null) rec.outputs[phase] = String(ev.output);
+  renderCard(rec);
+  refreshEmpty();
+  setMode("live");
+}
+
+function applySummary(sum){
+  var per = (sum && (sum.per_model || sum.perModel)) || [];
+  var spread = sum ? (typeof sum.spread === "number" ? sum.spread : null) : null;
+  per.forEach(function(m){
+    if (!m || !m.model) return;
+    var rec = ensureModel(m.model, true);
+    if (typeof m.baseline === "number") rec.baseline = m.baseline;
+    if (typeof m.treatment === "number") rec.treatment = m.treatment;
+    renderCard(rec);
+  });
+  if (spread === null && per.length){
+    var lifts = per.map(function(m){ return m.lift; }).filter(function(l){ return typeof l === "number"; });
+    if (lifts.length) spread = Math.max.apply(null, lifts) - Math.min.apply(null, lifts);
+  }
+  renderFooter(spread, sum ? sum.headline : "");
+}
+
+function renderFooter(spread, headline){
+  if (spread === null || spread === undefined){
+    els.footer.hidden = true;
+    return;
+  }
+  els.footer.hidden = false;
+  els["spread-num"].textContent = signed(spread);
+  els["headline"].textContent = headline || "";
+}
+
+function setBusy(b){
+  S.busy = !!b;
+  els["run-btn"].disabled = !!b;
+  els["cached-btn"].disabled = !!b;
+  els["stop-btn"].hidden = !b;
+}
+
+/* ============================ live stream ============================ */
+function stopStream(){
+  if (es){ try{ es.close(); }catch(e){} es = null; }
+  S.connected = false;
+}
+
+function attachStream(runId){
+  stopStream();
+  if (S.stopped) return;
+  var qs = runId ? ("?run_id=" + encodeURIComponent(runId)) : "";
+  if (!window.EventSource){
+    serverBanner("this browser has no EventSource — live streaming unavailable; use Show cached.", "err");
+    setMode("offline");
+    return;
+  }
+  try {
+    es = new EventSource("/events" + qs);
+  } catch(e){
+    serverBanner("could not open the event stream: " + e.message, "err");
+    setMode("offline");
+    return;
+  }
+
+  es.onopen = function(){ S.connected = true; setMode("live"); };
+  es.onmessage = function(e){
+    var d;
+    try { d = JSON.parse(e.data); } catch(err){ return; }
+    handleEvent(d);
+  };
+  es.onerror = function(){
+    S.connected = false;
+    stopStream();
+    if (S.stopped) return;
+    serverBanner("live stream interrupted (server or network) — use Show cached for the seeded run.", "warn");
+    setMode("offline");
+    setBusy(false);
+  };
+}
+
+function handleEvent(d){
+  if (!d || typeof d !== "object") return;
+  var t = d.type || "";
+  if (t === "result"){
+    applyResult(d);
+  } else if (t === "summary"){
+    applySummary(d);
+    setMode("cached");
+    setBusy(false);
+  } else if (t === "status"){
+    setMode("live");
+    if (d.text) serverBanner(d.text, "info");
+  } else if (t === "banner" || t === "warning" || t === "notice"){
+    var kind = d.kind || d.level || (t === "warning" ? "warn" : "info");
+    if (kind === "error") kind = "err";
+    serverBanner(d.message || d.text || "", kind);
+  } else if (t === "done"){
+    stopStream();
+    setBusy(false);
+  }
+}
+
+/* ============================ run flow ============================ */
+function selectedModels(){
+  var out = [];
+  var boxes = els.models.querySelectorAll('input[type="checkbox"]');
+  for (var i = 0; i < boxes.length; i++){
+    if (boxes[i].checked && boxes[i].value) out.push(boxes[i].value);
+  }
+  return out.length ? out : ["gemma-4-31b-it"];
+}
+
+function bodyFromForm(){
+  var md = els["skill-md"].value.trim();
+  var task = els.task.value.trim();
+  var models = selectedModels();
+  return {
+    skill: md ? { md: md } : { dir: "fault-inject" },
+    task: task || "Summarize the failure mode and say what to do next.",
+    models: models
+  };
+}
+
+function startRun(){
+  if (S.busy) return;
+  S.stopped = false;
+  var myReq = ++S.reqId;
+  clearBanners();
+  var body = bodyFromForm();
+  skeletons(body.models);
+  setBusy(true);
+  setMode("live");
+
+  fetch("/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  }).then(function(r){
+    if (myReq !== S.reqId) return null;
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function(d){
+    if (!d || myReq !== S.reqId) return;
+    S.runId = d.run_id || d.id || null;
+    attachStream(S.runId);
+  }).catch(function(e){
+    if (myReq !== S.reqId) return;
+    // Backend contract says /run always returns a run_id; if it 404s (older
+    // server) fall back to an anonymous stream so the dashboard still works.
+    if (e && /404/.test(e.message)){
+      attachStream(null);
+    } else {
+      serverBanner("could not start the run (" + e.message + ") — showing the cached run instead.", "warn");
+      loadCached();
+    }
+  });
+}
+
+/* Reset the cards area. The #empty placeholder is re-attached (not destroyed)
+   so the offline/empty state keeps working after any previous run. */
+function resetCards(){
+  clear(els.cards);
+  els.cards.appendChild(els.empty);
+  els.empty.hidden = false;
+  S.models = {}; S.order = [];
+  els.footer.hidden = true;
+}
+
+// Hide the placeholder once at least one model card exists.
+function refreshEmpty(){
+  var hasCard = false;
+  for (var k in S.models){ if (S.models[k] && S.models[k].node){ hasCard = true; break; } }
+  els.empty.hidden = hasCard;
+}
+
+function loadCached(runId){
+  runId = runId || "latest";
+  S.stopped = false;
+  var myReq = ++S.reqId;
+  stopStream();
+  clearBanners();
+  setMode("cached");
+  fetch("/cached/" + encodeURIComponent(runId), {
+    headers: { "Accept": "application/json" }
+  }).then(function(r){
+    if (myReq !== S.reqId) return null;
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function(d){
+    if (!d || myReq !== S.reqId) return;
+    renderCached(d);
+  }).catch(function(e){
+    if (myReq !== S.reqId) return;
+    renderOffline(e);
+  });
+}
+
+function renderCached(payload){
+  var d = (payload && typeof payload === "object" && !Array.isArray(payload)) ? payload : {};
+  var results = d.results || d.events || [];
+  var summary = d.summary || null;
+  var bannerText = d.banner || d.message || null;
+  var nokey = !!(d.no_key || d.nokey || (d.summary && d.summary.type === "summary") || (bannerText && /key/i.test(bannerText)));
+
+  resetCards();
+
+  if (!Array.isArray(results) || !results.length){
+    if (summary){
+      results = [{ type: "summary", per_model: summary.per_model || [], spread: summary.spread, headline: summary.headline }];
+    } else {
+      renderOffline(new Error("no cached run on the server yet"));
+      return;
+    }
+  }
+
+  results.forEach(function(ev){
+    if (ev && ev.type === "summary") applySummary(ev);
+    else if (ev) applyResult(ev);
+  });
+
+  if (summary && !results.some(function(ev){ return ev && ev.type === "summary"; })){
+    applySummary(summary);
+  }
+
+  refreshEmpty();
+
+  var n = S.order.length;
+  if (n){
+    setMode("cached");
+    serverBanner(
+      "cached run — " + n + " model" + (n === 1 ? "" : "s") + ", " + (nokey ? "no API key" : "served from cache") + ".",
+      nokey ? "warn" : "info",
+      nokey ? "no key" : "cached"
+    );
+    if (bannerText) serverBanner(bannerText, "warn", "no key");
+  } else {
+    renderOffline(new Error("empty cached run"));
+  }
+}
+
+function renderOffline(err){
+  resetCards();
+  els.empty.hidden = false;
+  setMode("offline");
+  var msg = (err && err.message) ? err.message : "unknown error";
+  serverBanner("could not load a cached run (" + msg + "). Start the server with `python app.py` and it will appear here.", "err");
+}
+
+/* ============================ fixtures ============================ */
+function renderFixtures(skills){
+  S.skills = skills || [];
+  clear(els.fixtures);
+  if (!S.skills.length){
+    els.fixtures.appendChild(el("span", "hint", "no fixtures bundled — paste a SKILL.md"));
+    return;
+  }
+  S.skills.forEach(function(s){
+    var name = s.name || (s.dir || "").replace(/\/+$/,"");
+    var b = el("button", null, name);
+    b.type = "button";
+    b.title = s.description || name;
+    b.onclick = function(){
+      fillFixture(s);
+    };
+    els.fixtures.appendChild(b);
+  });
+}
+
+function fillFixture(s){
+  var dir = s.dir || s.name;
+  fetch("/skill/" + encodeURIComponent(dir), { headers: { "Accept": "text/plain" } })
+    .then(function(r){ if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
+    .then(function(text){
+      if (text && /^---\s*\n/.test(text.trim())){
+        els["skill-md"].value = text;
+      } else {
+        throw new Error("not a SKILL.md");
+      }
+    })
+    .catch(function(){
+      els["skill-md"].value = frontmatterFor(s);
+    });
+}
+
+function frontmatterFor(s){
+  var name = s.name || "skill";
+  var desc = (s.description || "").replace(/\n+/g, " ").slice(0, 1024);
+  return "---\nname: " + name + "\ndescription: " + desc + "\n---\n\n(run from the bundled fixture: " + (s.dir || name) + ")\n";
+}
+
+function loadSkills(){
+  fetch("/skills", { headers: { "Accept": "application/json" } })
+    .then(function(r){
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function(d){
+      renderFixtures(d.skills || []);
+    })
+    .catch(function(){
+      renderFixtures([]);
+      els["judge-hint"].textContent = "judge: gemma-4-31b-it (default) · server offline";
+    });
+}
+
+/* ============================ wiring ============================ */
+els["run-btn"].onclick = startRun;
+els["cached-btn"].onclick = function(){ loadCached(); };
+els["stop-btn"].onclick = function(){
+  S.stopped = true;
+  stopStream();
+  setBusy(false);
+  setMode("idle");
+  serverBanner("stream stopped. Show cached to see the seeded run.", "info");
+};
+
+document.addEventListener("keydown", function(e){
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !S.busy) startRun();
+});
+
+/* ============================ boot ============================ */
+function boot(){
+  setMode("boot");
+  loadSkills();
+  els["judge-hint"].textContent = "judge: gemma-4-31b-it (default) · baseline vs treatment, per model";
+  var params = new URLSearchParams(window.location.search || "");
+  var runId = params.get("run") || params.get("run_id");
+  if (runId){
+    attachStream(runId);
+  } else {
+    loadCached();
+  }
+}
+
+if (document.readyState === "loading"){
+  document.addEventListener("DOMContentLoaded", boot);
+} else {
+  boot();
+}
+
+/* test hooks (harmless in the browser) */
+window.kaizen = {
+  handleEvent: handleEvent,
+  applyResult: applyResult,
+  applySummary: applySummary,
+  renderCached: renderCached,
+  state: S,
+  boot: boot
+};
+})();
+</script>
+</body>
+</html>

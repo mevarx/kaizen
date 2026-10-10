@@ -1,6 +1,40 @@
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 cached/responses.json
 cached/runs/
 .DS_Store
+
+# Python environments / build artefacts
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+desktop.ini
+
+# Runtime artefacts (the seeded demo run IS committed; live caches are not)
+*.log
+*.tmp
